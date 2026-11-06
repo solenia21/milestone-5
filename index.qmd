@@ -1,0 +1,119 @@
+---
+title: "D1 Softball Batting Explorer"
+format:
+  html:
+    echo: false
+    warning: false
+    message: false
+---
+
+```{r}
+library(httr2)
+library(jsonlite)
+library(rvest)
+library(dplyr)
+library(purrr)
+
+fetch_season_batting <- \(season) {
+  payload <- list(
+    `batting-table` = list(
+      callback = "adv_stats",
+      args = list(
+        object_id = 0,
+        post_type = "national",
+        season = as.character(season),
+        split_type = "overall",
+        template = "batting-table"
+      )
+    )
+  )
+
+  resp <- request("https://d1softball.com/wp-json/d1/v1/dynamic-content/") |>
+    req_body_json(payload) |>
+    req_perform() |>
+    resp_body_string() |>
+    fromJSON()
+
+  read_html(resp$content$`batting-table`) |>
+    html_element("#batting-stats") |>
+    html_table() |>
+    mutate(Season = as.character(season))
+}
+
+batting <- map(c(2025, 2026), fetch_season_batting) |>
+  list_rbind() |>
+  select(Season, Player, Team, Class, POS, BA, OBP, SLG, OPS, GP, PA, AB, H, HR, BB, K) |>
+  filter(!is.na(BA), !is.na(OBP), !is.na(SLG))
+
+ojs_define(batting_raw = batting)
+```
+
+```{ojs}
+players = transpose(batting_raw)
+
+viewof y_metric = Inputs.radio(
+  new Map([
+    ["On-Base Percentage (OBP)", "OBP"],
+    ["Slugging Percentage (SLG)", "SLG"],
+    ["Home Runs (HR)", "HR"],
+    ["At Bats (AB)", "AB"]
+  ]),
+  { value: "OBP", label: "Y-Axis Metric:" }
+)
+
+viewof season_filter = Inputs.select(
+  ["All", "2026", "2025"],
+  { value: "All", label: "Season:" }
+)
+
+viewof min_pa = Inputs.range(
+  [0, 200],
+  { value: 50, step: 10, label: "Minimum PA:" }
+)
+
+filtered = players.filter(d =>
+  (season_filter === "All" || d.Season === season_filter) &&
+  d.PA >= min_pa
+)
+```
+
+**Showing ${filtered.length.toLocaleString()} player-seasons**
+
+```{ojs}
+y_labels = ({
+  OBP: "On-Base Percentage (OBP)",
+  SLG: "Slugging Percentage (SLG)",
+  HR: "Home Runs (HR)",
+  AB: "At Bats (AB)"
+})
+
+Plot.plot({
+  width: 800,
+  height: 520,
+  grid: true,
+  x: {
+    label: "Batting Average (BA)",
+    domain: [0.1, 0.55]
+  },
+  y: {
+    label: y_labels[y_metric],
+    nice: true
+  },
+  color: {
+    legend: true,
+    label: "Class"
+  },
+  marks: [
+    Plot.dot(filtered, {
+      x: "BA",
+      y: y_metric,
+      stroke: "Class",
+      fill: "Class",
+      fillOpacity: 0.55,
+      r: 3.5,
+      tip: true,
+      title: d => `${d.Player} (${d.Team}, ${d.Season})\nClass: ${d.Class} | POS: ${d.POS} | PA: ${d.PA} | AB: ${d.AB}\nBA: ${d.BA.toFixed(3)} | OBP: ${d.OBP.toFixed(3)} | SLG: ${d.SLG.toFixed(3)} | HR: ${d.HR}`
+    })
+  ]
+})
+```
